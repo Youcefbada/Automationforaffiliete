@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-import praw
+
 import requests
 
 try:
@@ -28,8 +28,8 @@ from core.logger import LogManager
 # Maximum continuous run time in seconds (7 hours)
 MAX_RUN_SECONDS = 7 * 60 * 60
 
-# Pause between full subreddit sweeps (5 minutes)
-SWEEP_INTERVAL = 5 * 60
+# Pause between full subreddit sweeps (10 minutes)
+SWEEP_INTERVAL = 10 * 60
 
 # Pause between Gemini API calls (free-tier rate limit)
 GEMINI_CALL_DELAY = 15
@@ -81,8 +81,6 @@ class BotEngine:
         # ---- Load settings ----
         settings = self._db.get_all_settings()
         required_keys = [
-            "reddit_client_id", "reddit_client_secret",
-            "reddit_username", "reddit_password", "reddit_user_agent",
             "gemini_api_key", "subreddits",
         ]
         missing = [k for k in required_keys if not settings.get(k)]
@@ -99,22 +97,6 @@ class BotEngine:
         tools = self._db.get_all_tools()
         if not tools:
             self._log.log("❌ No affiliate tools found. Add some in the Tools Manager.")
-            return
-
-        # ---- Init Reddit (PRAW) ----
-        try:
-            reddit = praw.Reddit(
-                client_id=settings["reddit_client_id"],
-                client_secret=settings["reddit_client_secret"],
-                username=settings["reddit_username"],
-                password=settings["reddit_password"],
-                user_agent=settings["reddit_user_agent"],
-            )
-            # Quick validation
-            reddit.user.me()
-            self._log.log(f"✅ Reddit authenticated as u/{settings['reddit_username']}")
-        except Exception as e:
-            self._log.log(f"❌ Reddit auth failed: {e}")
             return
 
         # ---- Init Gemini ----
@@ -151,7 +133,7 @@ class BotEngine:
                 break
 
             try:
-                self._sweep(reddit, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                self._sweep(gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
             except Exception as e:
                 self._log.log(f"⚠️  Error during sweep: {e}")
                 self._log.log("Retrying in 60 seconds…")
@@ -174,13 +156,14 @@ class BotEngine:
     # Internal: single sweep of all subreddits
     # ------------------------------------------------------------------
 
-    def _sweep(self, reddit, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
-        """Iterate over each subreddit, fetch posts, analyse with Gemini."""
+    def _sweep(self, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
+        """Iterate over each subreddit, fetch posts via .json trick, analyse with Gemini."""
         tools_description = "\n".join(
             f"- {t['name']}: {t['description']} (Link: {t['affiliate_link']})"
             for t in tools
         )
         now_utc = datetime.now(timezone.utc)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
         for sub_name in subreddits:
             if self._stop_event.is_set():
@@ -188,48 +171,60 @@ class BotEngine:
 
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
-                subreddit = reddit.subreddit(sub_name)
-                posts = list(subreddit.new(limit=10))
+                url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+                posts = data.get('data', {}).get('children', [])
             except Exception as e:
                 self._log.log(f"   ⚠️  Could not fetch r/{sub_name}: {e}")
                 continue
 
-            for post in posts:
+            for post_item in posts:
                 if self._stop_event.is_set():
                     return
 
+                post = post_item.get('data', {})
+                post_id = post.get('id')
+
+                if not post_id:
+                    continue
+
                 # Skip already processed
-                if self._db.is_post_processed(post.id):
+                if self._db.is_post_processed(post_id):
                     continue
 
                 # Skip posts older than 3 hours
-                post_time = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
-                age_seconds = (now_utc - post_time).total_seconds()
-                if age_seconds > MAX_POST_AGE:
-                    continue
+                post_utc = post.get('created_utc')
+                if post_utc:
+                    post_time = datetime.fromtimestamp(post_utc, tz=timezone.utc)
+                    age_seconds = (now_utc - post_time).total_seconds()
+                    if age_seconds > MAX_POST_AGE:
+                        continue
 
-                self._log.log(f"   📝 Analysing: \"{post.title[:80]}\"")
+                title = post.get('title', '')
+                self._log.log(f"   📝 Analysing: \"{title[:80]}\"")
 
                 # Build the Gemini prompt
-                post_body = (post.selftext or "")[:2000]  # Truncate very long posts
+                post_body = post.get('selftext', '')[:2000]  # Truncate very long posts
+                permalink = post.get('permalink', '')
                 prompt = (
                     f"You are an expert Reddit user. Read this post:\n\n"
-                    f"Title: {post.title}\n"
+                    f"Title: {title}\n"
                     f"Text: {post_body}\n\n"
                     f"Here are my AI tools:\n{tools_description}\n\n"
                     f"Does the user need one of these tools? "
-                    f"If NO, just reply 'NO'. "
-                    f"If YES, pick the best tool and write a helpful, friendly Reddit "
-                    f"comment in the language of the post, offering advice first, "
-                    f"then recommending the tool with its link."
+                    f"If NO, reply exactly 'NO'. "
+                    f"If YES, pick the best tool, write a natural, friendly Reddit "
+                    f"reply recommending it (with the link)."
                 )
 
                 # Call Gemini with rate limiting
                 try:
-                    response = gemini_client.models.generate_content(
+                    res = gemini_client.models.generate_content(
                         model=model_name, contents=prompt
                     )
-                    reply_text = response.text.strip()
+                    reply_text = res.text.strip()
                 except Exception as e:
                     self._log.log(f"   ⚠️  Gemini error: {e}")
                     time.sleep(GEMINI_CALL_DELAY)
@@ -238,7 +233,7 @@ class BotEngine:
                 time.sleep(GEMINI_CALL_DELAY)
 
                 # Mark as processed regardless of outcome
-                self._db.mark_post_processed(post.id)
+                self._db.mark_post_processed(post_id)
 
                 if reply_text.upper() == "NO":
                     self._log.log("   ⏭️  Not relevant — skipped.")
@@ -250,8 +245,8 @@ class BotEngine:
                 if telegram_enabled:
                     self._send_telegram(
                         tg_token, tg_chat_id,
-                        post_title=post.title,
-                        post_url=f"https://reddit.com{post.permalink}",
+                        post_title=title,
+                        post_url=f"https://www.reddit.com{permalink}",
                         comment=reply_text,
                     )
                 else:

@@ -23,13 +23,6 @@ COLOR_INPUT_BG = "#16162a"
 
 # Settings schema: (db_key, label, placeholder, is_secret)
 SETTINGS_SCHEMA = [
-    ("section", "Reddit API", None, None),
-    ("reddit_client_id",     "Client ID",     "Reddit app client ID",     False),
-    ("reddit_client_secret", "Client Secret",  "Reddit app client secret", True),
-    ("reddit_username",      "Username",       "Your Reddit username",     False),
-    ("reddit_password",      "Password",       "Your Reddit password",     True),
-    ("reddit_user_agent",    "User Agent",     "e.g. DZ-GHOST Bot v1.0 by /u/yourname", False),
-
     ("section", "Google Gemini", None, None),
     ("gemini_api_key", "API Key", "Your Gemini API key", True),
 
