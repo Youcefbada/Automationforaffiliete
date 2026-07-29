@@ -30,6 +30,10 @@ SETTINGS_SCHEMA = [
     ("telegram_bot_token", "Bot Token",  "Telegram bot token from @BotFather", True),
     ("telegram_chat_id",   "Chat ID",    "Your Telegram chat ID",              False),
 
+    ("section", "Proxy API", None, None),
+    ("proxy_url", "Proxy URL", "https://your-domain.com/reddit", False),
+    ("proxy_api_key", "Proxy Key", "Secret key for your proxy (optional)", True),
+
     ("section", "Target Subreddits", None, None),
     ("subreddits", "Subreddits", "Comma separated, e.g. SaaS,startups,freelance", False),
 ]

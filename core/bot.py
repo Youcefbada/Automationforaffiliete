@@ -13,8 +13,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-
-from curl_cffi import requests
+import requests
 
 try:
     from google import genai
@@ -133,7 +132,7 @@ class BotEngine:
                 break
 
             try:
-                self._sweep(gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                self._sweep(gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled, settings.get("proxy_url", ""), settings.get("proxy_api_key", ""))
             except Exception as e:
                 self._log.log(f"⚠️  Error during sweep: {e}")
                 self._log.log("Retrying in 60 seconds…")
@@ -156,8 +155,8 @@ class BotEngine:
     # Internal: single sweep of all subreddits
     # ------------------------------------------------------------------
 
-    def _sweep(self, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
-        """Iterate over each subreddit, fetch posts via .json trick, analyse with Gemini."""
+    def _sweep(self, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled, proxy_url, proxy_api_key):
+        """Iterate over each subreddit, fetch posts via Proxy API (or direct .json), analyse with Gemini."""
         tools_description = "\n".join(
             f"- {t['name']}: {t['description']} (Link: {t['affiliate_link']})"
             for t in tools
@@ -176,8 +175,17 @@ class BotEngine:
 
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
-                url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
-                response = requests.get(url, headers=headers, impersonate="chrome110", timeout=10)
+                if proxy_url:
+                    # Request via Node.js Proxy
+                    params = {'sub': sub_name}
+                    if proxy_api_key:
+                        params['key'] = proxy_api_key
+                    response = requests.get(proxy_url, params=params, timeout=15)
+                else:
+                    # Fallback to direct request
+                    url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
+                    response = requests.get(url, headers=headers, timeout=10)
+                
                 response.raise_for_status()
                 data = response.json()
                 posts = data.get('data', {}).get('children', [])
