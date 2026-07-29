@@ -163,16 +163,21 @@ class BotEngine:
             for t in tools
         )
         now_utc = datetime.now(timezone.utc)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
         for sub_name in subreddits:
             if self._stop_event.is_set():
                 return
 
+            # Force a delay between subreddits to prevent rate limiting (403 blocks)
+            # wait(4) pauses for 4 seconds, but wakes immediately if stop_event is set
+            if self._stop_event.wait(timeout=4):
+                return
+
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
-                response = requests.get(url, headers=headers, timeout=15)
+                response = requests.get(url, headers=headers, timeout=10)
                 response.raise_for_status()
                 data = response.json()
                 posts = data.get('data', {}).get('children', [])
