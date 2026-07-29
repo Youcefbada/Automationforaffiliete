@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 
 
-import requests
+from curl_cffi import requests
 
 try:
     from google import genai
@@ -177,7 +177,7 @@ class BotEngine:
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
-                response = requests.get(url, headers=headers, timeout=10)
+                response = requests.get(url, headers=headers, impersonate="chrome110", timeout=10)
                 response.raise_for_status()
                 data = response.json()
                 posts = data.get('data', {}).get('children', [])
