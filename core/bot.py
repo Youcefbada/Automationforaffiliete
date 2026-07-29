@@ -209,14 +209,18 @@ class BotEngine:
                 post_body = post.get('selftext', '')[:2000]  # Truncate very long posts
                 permalink = post.get('permalink', '')
                 prompt = (
-                    f"You are an expert Reddit user. Read this post:\n\n"
+                    f"You are a helpful, expert Reddit user. Read this post:\n\n"
                     f"Title: {title}\n"
                     f"Text: {post_body}\n\n"
-                    f"Here are my AI tools:\n{tools_description}\n\n"
-                    f"Does the user need one of these tools? "
-                    f"If NO, reply exactly 'NO'. "
-                    f"If YES, pick the best tool, write a natural, friendly Reddit "
-                    f"reply recommending it (with the link)."
+                    f"Here are the tools I promote:\n{tools_description}\n\n"
+                    f"Does the user need one of these tools? If NO, reply exactly 'NO'.\n"
+                    f"If YES, pick the best tool and write a very natural, friendly Reddit reply in the same language as the post.\n\n"
+                    f"CRITICAL RULES FOR YOUR REPLY:\n"
+                    f"1. Empathize with their problem first.\n"
+                    f"2. Recommend the tool by NAME only.\n"
+                    f"3. NEVER INCLUDE ANY HTTP LINKS OR URLS in the comment.\n"
+                    f"4. Tell the user exactly this concept: 'I don't want to spam links here, but I have put the link to this tool in the pinned post on my Reddit profile if you want to check it out.'\n"
+                    f"Act like a friend recommending a solution, not a marketer."
                 )
 
                 # Call Gemini with rate limiting
