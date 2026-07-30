@@ -17,10 +17,7 @@ import os
 import requests
 from core.browser.manager import BrowserManager
 
-try:
-    from google import genai
-except ImportError:
-    genai = None
+
 
 from core.database import Database
 from core.logger import LogManager
@@ -100,17 +97,8 @@ class BotEngine:
             self._log.log("❌ No affiliate tools found. Add some in the Tools Manager.")
             return
 
-        # ---- Init Gemini ----
-        if genai is None:
-            self._log.log("❌ google-genai package not installed.")
-            return
-        try:
-            gemini_client = genai.Client(api_key=settings["gemini_api_key"])
-            model_name = "gemini-2.0-flash"
-            self._log.log(f"✅ Gemini AI configured ({model_name})")
-        except Exception as e:
-            self._log.log(f"❌ Gemini init failed: {e}")
-            return
+        # ---- Init Local AI Config ----
+        self._log.log("✅ Running in Pure Local Mode (No External AI API)")
 
         # ---- Telegram setup (optional) ----
         tg_token = settings.get("telegram_bot_token", "")
@@ -149,10 +137,9 @@ class BotEngine:
                 except Exception as e:
                     self._log.log(f"⚠️ Failed to inject cookies: {e}")
             
-            # Extract cookies to a super fast requests session
-            req_session = browser.get_requests_session()
-            self._log.log("⚡ Extracted cookies. Closing heavy browser and switching to super-fast invisible API mode!")
-            browser.driver.quit()
+            # --- Removed requests session extraction ---
+            # We keep the browser OPEN because Reddit blocks python requests with 403 Forbidden.
+            self._log.log("✅ Using Chrome tabs for scraping to avoid Reddit 403 blocks.")
             
             while not self._stop_event.is_set():
                 # 7-hour guard
@@ -162,7 +149,7 @@ class BotEngine:
                     break
 
                 try:
-                    self._sweep(req_session, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                    self._sweep(browser, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
                 except Exception as e:
                     self._log.log(f"⚠️  Error during sweep: {e}")
                     self._log.log("Retrying in 60 seconds…")
@@ -190,11 +177,11 @@ class BotEngine:
     # ------------------------------------------------------------------
 
     def _sweep(
-        self, req_session, gemini_client, model_name: str,
+        self, browser,
         subreddits: list, tools: list,
         tg_token: str, tg_chat_id: str, telegram_enabled: bool
     ):
-        """Perform one full sweep of all target subreddits using lightning-fast requests API."""
+        """Perform one full sweep of all target subreddits using Selenium tabs."""
         now_utc = datetime.now(timezone.utc)
 
         # Build tools description for prompt
@@ -210,29 +197,57 @@ class BotEngine:
             if self._stop_event.wait(timeout=2):
                 return
 
-            self._log.log(f"🔍 Scraping r/{sub_name} via API…")
+            self._log.log(f"🔍 Scraping r/{sub_name} via Chrome…")
             try:
-                url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=25"
+                url = f"https://www.reddit.com/r/{sub_name}/new/"
                 
-                # Lightning-fast HTTP Request
-                response = req_session.get(url, timeout=10)
-                if not response.ok:
-                    self._log.log(f"   ⚠️  HTTP {response.status_code}: {response.text[:100]}")
-                    continue
-                    
-                data = response.json()
-                posts = data.get('data', {}).get('children', [])
+                browser.open_tab(url)
+                # Wait 5 seconds to act human-like and let the UI render fully
+                time.sleep(5)
+                # Scroll down slightly to trigger lazy loading if needed
+                browser.driver.execute_script("window.scrollTo(0, 1500);")
+                time.sleep(2)
+                
+                js_script = """
+                let results = [];
+                let posts = document.querySelectorAll('shreddit-post');
+                for (let p of posts) {
+                    try {
+                        let id = p.getAttribute('id');
+                        let title = p.getAttribute('post-title') || '';
+                        let permalink = p.getAttribute('permalink') || '';
+                        let created_ts = p.getAttribute('created-timestamp');
+                        let created_utc = created_ts ? (new Date(created_ts).getTime() / 1000) : null;
+                        
+                        let body_el = p.querySelector('[slot="text-body"]');
+                        let body = body_el ? body_el.innerText : '';
+                        
+                        results.push({
+                            id: id, 
+                            title: title, 
+                            selftext: body, 
+                            permalink: permalink, 
+                            created_utc: created_utc
+                        });
+                    } catch(e) {}
+                }
+                return results;
+                """
+                
+                posts = browser.driver.execute_script(js_script)
+                browser.close_tab()
                 
             except Exception as e:
                 self._log.log(f"   ⚠️  Could not fetch r/{sub_name}: {e}")
+                try: browser.close_tab() 
+                except: pass
                 continue
 
             for post_item in posts:
                 if self._stop_event.is_set():
                     return
 
-                post = post_item.get('data', {})
-                post_id = post.get('id')
+                post_id = post_item.get('id')
 
                 if not post_id:
                     continue
@@ -242,15 +257,16 @@ class BotEngine:
                     continue
 
                 # Skip posts older than 3 hours
-                post_utc = post.get('created_utc')
+                post_utc = post_item.get('created_utc')
                 if post_utc:
                     post_time = datetime.fromtimestamp(post_utc, tz=timezone.utc)
                     age_seconds = (now_utc - post_time).total_seconds()
                     if age_seconds > MAX_POST_AGE:
                         continue
 
-                title = post.get('title', '')
-                post_body = post.get('selftext', '')[:2000]  # Truncate very long posts
+                title = post_item.get('title', '')
+                post_body = post_item.get('selftext', '')[:2000]  # Truncate very long posts
+                permalink = post_item.get('permalink', '')
                 
                 # --- Advanced "Lead Scoring" Filter ---
                 combined_text = (title + " " + post_body).lower()
@@ -279,58 +295,22 @@ class BotEngine:
                     self._db.mark_post_processed(post_id)
                     continue
 
-                self._log.log(f"   🤖 Sending to AI Consultant: \"{title[:80]}\"")
+                self._log.log(f"   🎯 Target Lead Found: \"{title[:80]}\"")
 
-                # Build the Gemini prompt (Consultant style)
-                permalink = post.get('permalink', '')
-                prompt = (
-                    f"You are a highly skilled software consultant. Read this post:\n\n"
-                    f"Title: {title}\n"
-                    f"Text: {post_body}\n\n"
-                    f"Here are the tools in my portfolio:\n{tools_description}\n\n"
-                    f"Does this user specifically need one of these tools? If NO, reply exactly 'NO'.\n"
-                    f"If YES, act as an expert consultant recommending the best fit. Explain WHY it solves their exact problem.\n\n"
-                    f"CRITICAL RULES FOR YOUR REPLY:\n"
-                    f"1. Empathize with their problem first.\n"
-                    f"2. Recommend the tool by NAME only.\n"
-                    f"3. NEVER INCLUDE ANY HTTP LINKS OR URLS in the comment.\n"
-                    f"4. Tell the user exactly this concept: 'I don't want to spam links here, but I have put the link to this tool in the pinned post on my Reddit profile if you want to check it out.'\n"
-                )
-
-                # --- Database Memory Caching ---
-                cached_reply = self._db.get_similar_reply(combined_text)
-                if cached_reply:
-                    self._log.log("   🧠 [CACHE HIT] Found a 75%+ similar past post! Reusing old AI reply (0 API tokens used).")
-                    reply_text = cached_reply
+                # Generate a simple Local Template (No-AI)
+                if tools:
+                    suggested_tool = tools[0]["name"]
                 else:
-                    self._log.log("   ⏳ [CACHE MISS] Unique post. Sleeping 65 seconds to protect Google API limits...")
-                    # Safe-Sleep 65 seconds to strictly obey the 15 RPM limit and prevent quota exhaustion
-                    if self._stop_event.wait(timeout=65):
-                        return
-                        
-                    # Call Gemini
-                    try:
-                        res = gemini_client.models.generate_content(
-                            model=model_name, contents=prompt
-                        )
-                        reply_text = res.text.strip()
-                        
-                        # Save successful AI reply to the Memory Cache
-                        if reply_text.upper() != "NO":
-                            self._db.save_to_cache(combined_text, reply_text)
-                            
-                    except Exception as e:
-                        self._log.log(f"   ⚠️  Gemini error: {e}")
-                        continue
-
-                # (Wait removed since we use 65s pre-sleep)
+                    suggested_tool = "my tool"
+                    
+                reply_text = (
+                    f"Hey there, I saw your post and it looks like you are looking for a solution. "
+                    f"You should definitely check out {suggested_tool}.\n\n"
+                    f"(I don't want to spam links here, but I put the link to it in the pinned post on my Reddit profile if you want to check it out!)"
+                )
 
                 # Mark as processed regardless of outcome
                 self._db.mark_post_processed(post_id)
-
-                if reply_text.upper() == "NO":
-                    self._log.log("   ⏭️  Not relevant — skipped.")
-                    continue
 
                 self._log.log("   ✅ Match found! Sending Telegram notification…")
 
