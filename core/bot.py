@@ -97,8 +97,19 @@ class BotEngine:
             self._log.log("❌ No affiliate tools found. Add some in the Tools Manager.")
             return
 
-        # ---- Init Local AI Config ----
-        self._log.log("✅ Running in Pure Local Mode (No External AI API)")
+        # ---- Init Groq AI Config ----
+        try:
+            from groq import Groq
+            groq_key = settings.get("groq_api_key", "").strip()
+            if not groq_key:
+                self._log.log("⚠️  Running in Pure Local Mode (No Groq API Key found in settings)")
+                groq_client = None
+            else:
+                groq_client = Groq(api_key=groq_key)
+                self._log.log("✅ Groq AI (Llama 3) configured")
+        except ImportError:
+            self._log.log("⚠️  Running in Pure Local Mode (groq package not installed)")
+            groq_client = None
 
         # ---- Telegram setup (optional) ----
         tg_token = settings.get("telegram_bot_token", "")
@@ -149,7 +160,7 @@ class BotEngine:
                     break
 
                 try:
-                    self._sweep(browser, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                    self._sweep(browser, groq_client, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
                 except Exception as e:
                     self._log.log(f"⚠️  Error during sweep: {e}")
                     self._log.log("Retrying in 60 seconds…")
@@ -177,7 +188,7 @@ class BotEngine:
     # ------------------------------------------------------------------
 
     def _sweep(
-        self, browser,
+        self, browser, groq_client,
         subreddits: list, tools: list,
         tg_token: str, tg_chat_id: str, telegram_enabled: bool
     ):
@@ -298,39 +309,67 @@ class BotEngine:
                 self._log.log(f"   🎯 Target Lead Found: \"{title[:80]}\"")
 
                 # Generate a smart Local Template (No-AI)
-                suggested_tool = "my tool"
-                if tools:
-                    # Smart routing based on keywords
-                    if any(kw in combined_text for kw in ["social", "post", "schedule", "instagram", "content", "marketing", "facebook"]):
-                        # Route to Ocoya
-                        for t in tools:
-                            if "Ocoya" in t["name"]:
-                                suggested_tool = "Ocoya"
-                                break
-                    elif any(kw in combined_text for kw in ["chat", "bot", "support", "document", "knowledge", "customer"]):
-                        # Route to CustomGPT
-                        for t in tools:
-                            if "CustomGPT" in t["name"]:
-                                suggested_tool = "CustomGPT"
-                                break
-                    else:
-                        # Fallback to CustomGPT if no strong match
-                        for t in tools:
-                            if "CustomGPT" in t["name"]:
-                                suggested_tool = "CustomGPT"
-                                break
+                # --- Generate Reply ---
+                if not groq_client:
+                    # Fallback to local routing
+                    suggested_tool = "my tool"
+                    if tools:
+                        if any(kw in combined_text for kw in ["social", "post", "schedule", "instagram", "content", "marketing", "facebook"]):
+                            for t in tools:
+                                if "Ocoya" in t["name"]:
+                                    suggested_tool = "Ocoya"
+                                    break
+                        elif any(kw in combined_text for kw in ["chat", "bot", "support", "document", "knowledge", "customer"]):
+                            for t in tools:
+                                if "CustomGPT" in t["name"]:
+                                    suggested_tool = "CustomGPT"
+                                    break
+                        else:
+                            for t in tools:
+                                if "CustomGPT" in t["name"]:
+                                    suggested_tool = "CustomGPT"
+                                    break
+                    import random
+                    clean_title = title.lower().strip()
+                    if len(clean_title) > 30:
+                        clean_title = clean_title[:30] + "..."
+                    templates = [
+                        f"Man I totally get what you're saying about {clean_title}. I was struggling with the exact same thing a while ago. You might want to look into {suggested_tool}, it pretty much automated that entire headache for me. I dropped the exact name of it on my page if you're curious, but either way good luck with it!",
+                        f"Read your post and it really resonated. Dealing with {clean_title} can be super annoying. Have you tried looking into {suggested_tool}? I started using it recently and it saved me so much time. I have a brief write-up about it on my wall if it helps.",
+                        f"I've been in the exact same boat. The easiest workaround I found was just using {suggested_tool}. It handles all the heavy lifting. I actually mentioned it on my bio if you want to see which one I use. Hope that helps man."
+                    ]
+                    reply_text = random.choice(templates)
+                else:
+                    self._log.log(f"   🤖 Sending to Groq (Llama 3): \"{title[:80]}\"")
                     
-                import random
-                clean_title = title.lower().strip()
-                if len(clean_title) > 30:
-                    clean_title = clean_title[:30] + "..."
+                    # Construct tools context
+                    tools_desc = ""
+                    for t in tools:
+                        tools_desc += f"Tool Name: {t['name']}\nDescription: {t['description']}\n\n"
+                        
+                    system_prompt = (
+                        "You are a casual 25-year-old Reddit user browsing forums. You must write a highly authentic, natural-sounding comment recommending a software tool.\n\n"
+                        "STRICT RULES TO AVOID REDDIT SPAM FILTERS:\n"
+                        "1. Write EXACTLY like a real human. Use lowercase where natural, words like 'tbh', 'man', 'ngl'. DO NOT sound corporate or like an AI.\n"
+                        "2. Start by acknowledging the user's specific problem in 1 sentence to prove you read the post.\n"
+                        "3. Recommend ONE of the provided tools by name ONLY. DO NOT include any links.\n"
+                        "4. NEVER use the words 'pinned post', 'profile', 'affiliate', or 'link'. Instead, casually mention: 'I actually dropped the name of it on my bio if you want to check it out' or 'I have a brief write up on my wall'.\n"
+                        "5. Keep it under 4 sentences.\n\n"
+                        f"AVAILABLE TOOLS:\n{tools_desc}"
+                    )
                     
-                templates = [
-                    f"Man I totally get what you're saying about {clean_title}. I was struggling with the exact same thing a while ago. You might want to look into {suggested_tool}, it pretty much automated that entire headache for me. I dropped the exact name of it on my page if you're curious, but either way good luck with it!",
-                    f"Read your post and it really resonated. Dealing with {clean_title} can be super annoying. Have you tried looking into {suggested_tool}? I started using it recently and it saved me so much time. I have a brief write-up about it on my wall if it helps.",
-                    f"I've been in the exact same boat. The easiest workaround I found was just using {suggested_tool}. It handles all the heavy lifting. I actually mentioned it on my bio if you want to see which one I use. Hope that helps man."
-                ]
-                reply_text = random.choice(templates)
+                    try:
+                        chat_completion = groq_client.chat.completions.create(
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": f"Post Title: {title}\n\nPost Body: {post_body}"}
+                            ],
+                            model="llama3-8b-8192",
+                        )
+                        reply_text = chat_completion.choices[0].message.content.strip()
+                    except Exception as e:
+                        self._log.log(f"   ⚠️  Groq API Error: {e}")
+                        continue
 
                 # Mark as processed regardless of outcome
                 self._db.mark_post_processed(post_id)
