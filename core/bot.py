@@ -215,6 +215,7 @@ class BotEngine:
                         let id = p.getAttribute('id');
                         let title = p.getAttribute('post-title') || '';
                         let permalink = p.getAttribute('permalink') || '';
+                        let author = p.getAttribute('author') || 'Unknown';
                         let created_ts = p.getAttribute('created-timestamp');
                         let created_utc = created_ts ? (new Date(created_ts).getTime() / 1000) : null;
                         
@@ -226,6 +227,7 @@ class BotEngine:
                             title: title, 
                             selftext: body, 
                             permalink: permalink, 
+                            author: author,
                             created_utc: created_utc
                         });
                     } catch(e) {}
@@ -247,6 +249,7 @@ class BotEngine:
                     return
 
                 post_id = post_item.get('id')
+                author = post_item.get('author')
 
                 if not post_id:
                     continue
@@ -370,6 +373,7 @@ class BotEngine:
                         tg_token, tg_chat_id,
                         post_title=title,
                         post_url=f"https://www.reddit.com{permalink}",
+                        author=author,
                         comment=reply_text,
                     )
                 else:
@@ -380,13 +384,14 @@ class BotEngine:
     # Internal: Telegram notification
     # ------------------------------------------------------------------
 
-    def _send_telegram(self, token: str, chat_id: str, post_title: str, post_url: str, comment: str):
+    def _send_telegram(self, token: str, chat_id: str, post_title: str, post_url: str, author: str, comment: str):
         """Send a message to a Telegram chat via the Bot API."""
         message = (
             f"🔔 New Affiliate Opportunity\n\n"
-            f"Post: {post_title}\n"
-            f"URL: {post_url}\n\n"
-            f"Drafted Comment:\n{comment}"
+            f"👤 User: {author}\n"
+            f"✉️ DM Link: https://www.reddit.com/message/compose/?to={author}\n"
+            f"🔗 Post: {post_url}\n\n"
+            f"Drafted Comment / DM Text:\n{comment}"
         )
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {
