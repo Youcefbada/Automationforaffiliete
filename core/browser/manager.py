@@ -31,6 +31,7 @@ class BrowserManager:
         chrome_options.add_experimental_option('useAutomationExtension', False)
 
         try:
+            logger.info("Initializing webdriver.Chrome() (This might take a moment)...")
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("Successfully connected to Chrome via Selenium.")
             return self.driver

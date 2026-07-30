@@ -185,16 +185,20 @@ class BotEngine:
                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
                 
                 # Open a new background tab so we don't interrupt the user's active browsing
+                self._log.log(f"   [STEP 1] Opening tab for r/{sub_name}...")
                 browser.open_tab(url)
                 
                 # Extract the JSON text from the <pre> tag that Chrome renders
+                self._log.log(f"   [STEP 2] Extracting JSON via Javascript...")
                 json_text = browser.driver.execute_script("return document.querySelector('pre') ? document.querySelector('pre').innerText : document.body.innerText")
                 
+                self._log.log(f"   [STEP 3] Parsing JSON data...")
                 import json
                 data = json.loads(json_text)
                 posts = data.get('data', {}).get('children', [])
                 
                 # Close the background tab immediately
+                self._log.log(f"   [STEP 4] Closing background tab...")
                 browser.close_tab()
                 
             except Exception as e:
