@@ -35,8 +35,9 @@ class BrowserManager:
             logger.info("Successfully connected to Chrome via Selenium.")
             return self.driver
         except Exception as e:
-            logger.error(f"Failed to launch Chrome. Please ensure ALL Chrome windows are fully closed! Error: {e}")
-            raise SeleniumConnectionError(f"Could not launch Chrome. Is it already running?") from e
+            error_msg = f"Failed to launch Chrome: {str(e)}"
+            logger.error(error_msg)
+            raise SeleniumConnectionError(error_msg) from e
 
     def _ensure_driver(self) -> None:
         """Helper to ensure driver is initialized before calling browser methods."""
