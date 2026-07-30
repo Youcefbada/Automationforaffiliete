@@ -149,6 +149,15 @@ class BotEngine:
                 except Exception as e:
                     self._log.log(f"⚠️ Failed to inject cookies: {e}")
             
+            # Extract cookies to a super fast requests session
+            req_session = browser.get_requests_session()
+            self._log.log("⚡ Extracted cookies. Closing heavy browser and switching to super-fast invisible API mode!")
+            browser.driver.quit()
+            
+            # --- Keyword Filter ---
+            # High intent keywords to avoid wasting Gemini API limits
+            intent_keywords = ["how do i", "looking for", "recommend", "need help", "alternative", "tool", "app", "software", "struggle", "advice"]
+            
             while not self._stop_event.is_set():
                 # 7-hour guard
                 elapsed = time.time() - start_time
@@ -157,7 +166,7 @@ class BotEngine:
                     break
 
                 try:
-                    self._sweep(browser, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                    self._sweep(req_session, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled, intent_keywords)
                 except Exception as e:
                     self._log.log(f"⚠️  Error during sweep: {e}")
                     self._log.log("Retrying in 60 seconds…")
@@ -184,53 +193,43 @@ class BotEngine:
     # Internal: single sweep of all subreddits
     # ------------------------------------------------------------------
 
-    def _sweep(self, browser, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
-        """Iterate over each subreddit, fetch posts via authenticated Browser (Selenium), analyse with Gemini."""
-        tools_description = "\n".join(
-            f"- {t['name']}: {t['description']} (Link: {t['affiliate_link']})"
-            for t in tools
-        )
+    def _sweep(
+        self, req_session, gemini_client, model_name: str,
+        subreddits: list, tools: list,
+        tg_token: str, tg_chat_id: str, telegram_enabled: bool,
+        intent_keywords: list
+    ):
+        """Perform one full sweep of all target subreddits using lightning-fast requests API."""
         now_utc = datetime.now(timezone.utc)
+
+        # Build tools description for prompt
+        tools_description = ""
+        for t in tools:
+            tools_description += f"- **{t['name']}**: {t['description']}\n"
 
         for sub_name in subreddits:
             if self._stop_event.is_set():
                 return
 
-            # Force a delay between subreddits to prevent rate limiting (403 blocks)
-            if self._stop_event.wait(timeout=4):
+            # Quick delay between API calls to avoid Reddit rate limit (60/min limit)
+            if self._stop_event.wait(timeout=2):
                 return
 
-            self._log.log(f"🔍 Scanning r/{sub_name}…")
+            self._log.log(f"🔍 Scraping r/{sub_name} via API…")
             try:
                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=25"
                 
-                # Open a new background tab so we don't interrupt the user's active browsing
-                self._log.log(f"   [STEP 1] Opening tab for r/{sub_name}...")
-                browser.open_tab(url)
-                
-                # Extract the JSON text from the <pre> tag that Chrome renders
-                self._log.log(f"   [STEP 2] Extracting JSON via Javascript...")
-                json_text = browser.driver.execute_script("return document.querySelector('pre') ? document.querySelector('pre').innerText : document.body.innerText")
-                
-                self._log.log(f"   [STEP 3] Parsing JSON data...")
-                import json
-                data = json.loads(json_text)
+                # Lightning-fast HTTP Request
+                response = req_session.get(url, timeout=10)
+                if not response.ok:
+                    self._log.log(f"   ⚠️  HTTP {response.status_code}: {response.text[:100]}")
+                    continue
+                    
+                data = response.json()
                 posts = data.get('data', {}).get('children', [])
-                
-                # Wait 2 seconds before closing to appear more human-like
-                time.sleep(2)
-                
-                # Close the background tab immediately
-                self._log.log(f"   [STEP 4] Closing background tab...")
-                browser.close_tab()
                 
             except Exception as e:
                 self._log.log(f"   ⚠️  Could not fetch r/{sub_name}: {e}")
-                # Ensure tab is closed even if fetching fails
-                try:
-                    browser.close_tab()
-                except:
-                    pass
                 continue
 
             for post_item in posts:
@@ -256,24 +255,32 @@ class BotEngine:
                         continue
 
                 title = post.get('title', '')
-                self._log.log(f"   📝 Analysing: \"{title[:80]}\"")
-
-                # Build the Gemini prompt
                 post_body = post.get('selftext', '')[:2000]  # Truncate very long posts
+                
+                # Keyword Pre-filter to avoid Gemini Rate Limits
+                combined_text = (title + " " + post_body).lower()
+                if not any(kw in combined_text for kw in intent_keywords):
+                    self._log.log(f"   ⏭️  Skipped (No intent keywords): \"{title[:50]}\"")
+                    # Mark processed so we don't scan it again
+                    self._db.mark_post_processed(post_id)
+                    continue
+
+                self._log.log(f"   🤖 Sending to AI Consultant: \"{title[:80]}\"")
+
+                # Build the Gemini prompt (Consultant style)
                 permalink = post.get('permalink', '')
                 prompt = (
-                    f"You are a helpful, expert Reddit user. Read this post:\n\n"
+                    f"You are a highly skilled software consultant. Read this post:\n\n"
                     f"Title: {title}\n"
                     f"Text: {post_body}\n\n"
-                    f"Here are the tools I promote:\n{tools_description}\n\n"
-                    f"Does the user need one of these tools? If NO, reply exactly 'NO'.\n"
-                    f"If YES, pick the best tool and write a very natural, friendly Reddit reply in the same language as the post.\n\n"
+                    f"Here are the tools in my portfolio:\n{tools_description}\n\n"
+                    f"Does this user specifically need one of these tools? If NO, reply exactly 'NO'.\n"
+                    f"If YES, act as an expert consultant recommending the best fit. Explain WHY it solves their exact problem.\n\n"
                     f"CRITICAL RULES FOR YOUR REPLY:\n"
                     f"1. Empathize with their problem first.\n"
                     f"2. Recommend the tool by NAME only.\n"
                     f"3. NEVER INCLUDE ANY HTTP LINKS OR URLS in the comment.\n"
                     f"4. Tell the user exactly this concept: 'I don't want to spam links here, but I have put the link to this tool in the pinned post on my Reddit profile if you want to check it out.'\n"
-                    f"Act like a friend recommending a solution, not a marketer."
                 )
 
                 # Call Gemini with rate limiting

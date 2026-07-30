@@ -88,6 +88,25 @@ class BrowserManager:
         logger.info("Cookies injected successfully. Refreshing page to apply...")
         self.driver.refresh()
 
+    def get_requests_session(self) -> __import__('requests').Session:
+        """
+        Extracts cookies from the current Selenium session and returns a ready-to-use requests.Session.
+        This allows lightning-fast API scraping using the authenticated browser session.
+        """
+        self._ensure_driver()
+        import requests
+        session = requests.Session()
+        # Set a standard User-Agent to avoid generic bot blocking
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        
+        selenium_cookies = self.driver.get_cookies()
+        for cookie in selenium_cookies:
+            session.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain', ''))
+            
+        return session
+
     def open_tab(self, url: str) -> None:
         """Opens a new tab and navigates to the specified URL."""
         self._ensure_driver()
