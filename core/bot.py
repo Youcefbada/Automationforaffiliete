@@ -12,8 +12,9 @@ Implements the core loop:
 import threading
 import time
 from datetime import datetime, timezone
-
+import os
 import requests
+from playwright.sync_api import sync_playwright
 
 try:
     from google import genai
@@ -124,30 +125,50 @@ class BotEngine:
         self._log.log("—" * 50)
 
         # ---- Main sweep loop ----
-        while not self._stop_event.is_set():
-            # 7-hour guard
-            elapsed = time.time() - start_time
-            if elapsed >= MAX_RUN_SECONDS:
-                self._log.log("⏰ Daily 7-hour limit reached to protect account.")
-                break
+        headless = settings.get("headless_mode", "No").strip().lower() == "yes"
+        user_data_dir = os.path.join(os.path.expanduser("~"), "Desktop", "automation_chrome_profile")
+        executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-            try:
-                self._sweep(gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled, settings.get("proxy_url", ""), settings.get("proxy_api_key", ""))
-            except Exception as e:
-                self._log.log(f"⚠️  Error during sweep: {e}")
-                self._log.log("Retrying in 60 seconds…")
-                # Wait 60s but remain responsive to stop signal
-                if self._stop_event.wait(timeout=60):
-                    break
-                continue
+        try:
+            with sync_playwright() as p:
+                self._log.log(f"🌐 Launching Google Chrome (Headless: {headless})…")
+                browser_context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    executable_path=executable_path,
+                    headless=headless,
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1280, "height": 720}
+                )
+                page = browser_context.new_page()
 
-            # Wait between sweeps, but remain responsive to stop signal
-            remaining_hours = max(0, (MAX_RUN_SECONDS - (time.time() - start_time)) / 3600)
-            self._log.log(f"💤 Sweep complete. Sleeping {SWEEP_INTERVAL // 60} min "
-                          f"({remaining_hours:.1f}h remaining in shift)…")
-            self._log.log("—" * 50)
-            if self._stop_event.wait(timeout=SWEEP_INTERVAL):
-                break
+                while not self._stop_event.is_set():
+                    # 7-hour guard
+                    elapsed = time.time() - start_time
+                    if elapsed >= MAX_RUN_SECONDS:
+                        self._log.log("⏰ Daily 7-hour limit reached to protect account.")
+                        break
+
+                    try:
+                        self._sweep(page, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                    except Exception as e:
+                        self._log.log(f"⚠️  Error during sweep: {e}")
+                        self._log.log("Retrying in 60 seconds…")
+                        # Wait 60s but remain responsive to stop signal
+                        if self._stop_event.wait(timeout=60):
+                            break
+                        continue
+
+                    # Wait between sweeps, but remain responsive to stop signal
+                    remaining_hours = max(0, (MAX_RUN_SECONDS - (time.time() - start_time)) / 3600)
+                    self._log.log(f"💤 Sweep complete. Sleeping {SWEEP_INTERVAL // 60} min "
+                                  f"({remaining_hours:.1f}h remaining in shift)…")
+                    self._log.log("—" * 50)
+                    if self._stop_event.wait(timeout=SWEEP_INTERVAL):
+                        break
+
+                browser_context.close()
+        except Exception as e:
+            self._log.log(f"❌ Browser automation failed: {e}")
 
         self._log.log("🛑 Bot stopped.")
 
@@ -155,39 +176,31 @@ class BotEngine:
     # Internal: single sweep of all subreddits
     # ------------------------------------------------------------------
 
-    def _sweep(self, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled, proxy_url, proxy_api_key):
-        """Iterate over each subreddit, fetch posts via Proxy API (or direct .json), analyse with Gemini."""
+    def _sweep(self, page, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
+        """Iterate over each subreddit, fetch posts via authenticated Browser (Playwright), analyse with Gemini."""
         tools_description = "\n".join(
             f"- {t['name']}: {t['description']} (Link: {t['affiliate_link']})"
             for t in tools
         )
         now_utc = datetime.now(timezone.utc)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
         for sub_name in subreddits:
             if self._stop_event.is_set():
                 return
 
             # Force a delay between subreddits to prevent rate limiting (403 blocks)
-            # wait(4) pauses for 4 seconds, but wakes immediately if stop_event is set
             if self._stop_event.wait(timeout=4):
                 return
 
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
-                if proxy_url:
-                    # Request via Node.js Proxy
-                    params = {'sub': sub_name}
-                    if proxy_api_key:
-                        params['key'] = proxy_api_key
-                    response = requests.get(proxy_url, params=params, timeout=15)
-                else:
-                    # Fallback to direct request
-                    url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
-                    response = requests.get(url, headers=headers, timeout=10)
-                
-                response.raise_for_status()
-                data = response.json()
+                url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
+                # Evaluate Javascript directly inside the browser to fetch the JSON natively using browser cookies!
+                data = page.evaluate(f'''async () => {{
+                    const res = await fetch("{url}");
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    return await res.json();
+                }}''')
                 posts = data.get('data', {}).get('children', [])
             except Exception as e:
                 self._log.log(f"   ⚠️  Could not fetch r/{sub_name}: {e}")
