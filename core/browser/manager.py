@@ -17,21 +17,22 @@ class BrowserManager:
         self.config = ChromeConfig()
         self.driver: Optional[webdriver.Chrome] = None
 
-    def start(self) -> webdriver.Chrome:
+    def start(self, headless: bool = False) -> webdriver.Chrome:
         """
-        Ensures Chrome is running on the debug port, then connects Selenium 4 to it.
+        Ensures Chrome is running natively, then connects Selenium 4 to it.
         Returns the active webdriver instance.
         """
-        logger.info("Launching Chrome via native Selenium...")
+        logger.info(f"Launching Chrome via native Selenium (Headless: {headless})...")
         chrome_options = Options()
         chrome_options.add_argument(f"--user-data-dir={self.config.USER_DATA_DIR}")
-        chrome_options.add_argument(f"--profile-directory={self.config.PROFILE_DIR}")
-        # CRITICAL FIX for "DevToolsActivePort file doesn't exist" bug on Windows:
-        chrome_options.add_argument(f"--remote-debugging-port={self.config.DEBUG_PORT}")
+        
+        # Standard fixes for stability
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--remote-allow-origins=*")
+        
+        if headless:
+            chrome_options.add_argument("--headless=new")
         
         # Optional: Prevent Chrome from displaying 'Chrome is being controlled by automated software'
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -57,6 +58,35 @@ class BrowserManager:
         self._ensure_driver()
         logger.info(f"Navigating to: {url}")
         self.driver.get(url)
+
+    def inject_cookies(self, cookies: list, domain: str) -> None:
+        """
+        Injects a list of JSON cookies into the browser for the specified domain.
+        Must be called AFTER navigating to the domain (e.g. self.goto('https://reddit.com'))
+        """
+        self._ensure_driver()
+        logger.info(f"Injecting {len(cookies)} cookies into {domain}...")
+        for cookie in cookies:
+            try:
+                # Selenium requires 'name' and 'value', and optionally 'domain', 'path', 'secure', 'expiry'
+                # Clean up cookie dict to match Selenium's expected format
+                c = {
+                    'name': cookie.get('name', ''),
+                    'value': cookie.get('value', ''),
+                    'domain': cookie.get('domain', ''),
+                    'path': cookie.get('path', '/')
+                }
+                if 'secure' in cookie:
+                    c['secure'] = cookie['secure']
+                if 'expirationDate' in cookie:
+                    c['expiry'] = int(cookie['expirationDate'])
+                
+                self.driver.add_cookie(c)
+            except Exception as e:
+                logger.warning(f"Failed to inject cookie {cookie.get('name')}: {e}")
+        
+        logger.info("Cookies injected successfully. Refreshing page to apply...")
+        self.driver.refresh()
 
     def open_tab(self, url: str) -> None:
         """Opens a new tab and navigates to the specified URL."""

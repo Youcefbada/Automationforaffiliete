@@ -12,6 +12,8 @@ Implements the core loop:
 import threading
 import time
 from datetime import datetime, timezone
+import json
+import os
 import requests
 from core.browser.manager import BrowserManager
 
@@ -124,11 +126,29 @@ class BotEngine:
         self._log.log("—" * 50)
 
         # ---- Main sweep loop ----
+        headless = settings.get("headless_mode", "No").strip().lower() == "yes"
         try:
             browser = BrowserManager()
-            self._log.log("🌐 Connecting to your Windows Google Chrome profile...")
-            browser.start()
-
+            self._log.log("🌐 Connecting to Automation Chrome Profile...")
+            browser.start(headless=headless)
+            
+            # --- Cookie Injection Logic ---
+            cookies_path = "cookies.json"
+            if os.path.exists(cookies_path):
+                self._log.log("🍪 Found cookies.json! Injecting Reddit session...")
+                try:
+                    with open(cookies_path, "r", encoding="utf-8") as f:
+                        cookies = json.load(f)
+                    # We must be on reddit.com to set reddit.com cookies securely
+                    browser.goto("https://www.reddit.com")
+                    browser.inject_cookies(cookies, "reddit.com")
+                    
+                    # Rename the file so we don't inject it every single time we start the bot
+                    os.rename(cookies_path, "cookies_injected.json")
+                    self._log.log("✅ Cookies injected successfully. Renamed file to cookies_injected.json")
+                except Exception as e:
+                    self._log.log(f"⚠️ Failed to inject cookies: {e}")
+            
             while not self._stop_event.is_set():
                 # 7-hour guard
                 elapsed = time.time() - start_time

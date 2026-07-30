@@ -3,14 +3,13 @@ Configuration constants for the Browser Manager.
 Defines paths and ports required for Chrome Remote Debugging on Windows.
 """
 from dataclasses import dataclass
+import os
 
 @dataclass(frozen=True)
 class ChromeConfig:
     """Dataclass storing Chrome configuration details."""
-    EXECUTABLE_PATH: str = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    USER_DATA_DIR: str = r"C:\Users\Youcef\AppData\Local\Google\Chrome\User Data"
-    PROFILE_DIR: str = "Profile 19"
-    DEBUG_PORT: int = 9222
+    EXECUTABLE_PATH: str = "" # Not needed for native Selenium
+    USER_DATA_DIR: str = os.path.join(os.path.expanduser("~"), "Desktop", "automation_chrome_profile")
     DEBUG_HOST: str = "127.0.0.1"
     
     @property
