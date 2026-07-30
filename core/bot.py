@@ -12,9 +12,8 @@ Implements the core loop:
 import threading
 import time
 from datetime import datetime, timezone
-import os
 import requests
-from playwright.sync_api import sync_playwright
+from core.browser.manager import BrowserManager
 
 try:
     from google import genai
@@ -125,46 +124,37 @@ class BotEngine:
         self._log.log("—" * 50)
 
         # ---- Main sweep loop ----
-        headless = settings.get("headless_mode", "No").strip().lower() == "yes"
-        user_data_dir = os.path.join(os.path.expanduser("~"), "Desktop", "automation_chrome_profile")
         try:
-            with sync_playwright() as p:
-                self._log.log(f"🌐 Launching Google Chrome (Headless: {headless})…")
-                browser_context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    channel="chrome",
-                    headless=headless,
-                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    viewport={"width": 1280, "height": 720}
-                )
-                page = browser_context.new_page()
+            browser = BrowserManager()
+            self._log.log("🌐 Connecting to your Windows Google Chrome profile...")
+            browser.start()
 
-                while not self._stop_event.is_set():
-                    # 7-hour guard
-                    elapsed = time.time() - start_time
-                    if elapsed >= MAX_RUN_SECONDS:
-                        self._log.log("⏰ Daily 7-hour limit reached to protect account.")
+            while not self._stop_event.is_set():
+                # 7-hour guard
+                elapsed = time.time() - start_time
+                if elapsed >= MAX_RUN_SECONDS:
+                    self._log.log("⏰ Daily 7-hour limit reached to protect account.")
+                    break
+
+                try:
+                    self._sweep(browser, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                except Exception as e:
+                    self._log.log(f"⚠️  Error during sweep: {e}")
+                    self._log.log("Retrying in 60 seconds…")
+                    # Wait 60s but remain responsive to stop signal
+                    if self._stop_event.wait(timeout=60):
                         break
+                    continue
 
-                    try:
-                        self._sweep(page, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
-                    except Exception as e:
-                        self._log.log(f"⚠️  Error during sweep: {e}")
-                        self._log.log("Retrying in 60 seconds…")
-                        # Wait 60s but remain responsive to stop signal
-                        if self._stop_event.wait(timeout=60):
-                            break
-                        continue
+                # Wait between sweeps, but remain responsive to stop signal
+                remaining_hours = max(0, (MAX_RUN_SECONDS - (time.time() - start_time)) / 3600)
+                self._log.log(f"💤 Sweep complete. Sleeping {SWEEP_INTERVAL // 60} min "
+                              f"({remaining_hours:.1f}h remaining in shift)…")
+                self._log.log("—" * 50)
+                if self._stop_event.wait(timeout=SWEEP_INTERVAL):
+                    break
 
-                    # Wait between sweeps, but remain responsive to stop signal
-                    remaining_hours = max(0, (MAX_RUN_SECONDS - (time.time() - start_time)) / 3600)
-                    self._log.log(f"💤 Sweep complete. Sleeping {SWEEP_INTERVAL // 60} min "
-                                  f"({remaining_hours:.1f}h remaining in shift)…")
-                    self._log.log("—" * 50)
-                    if self._stop_event.wait(timeout=SWEEP_INTERVAL):
-                        break
-
-                browser_context.close()
+            browser.quit()
         except Exception as e:
             self._log.log(f"❌ Browser automation failed: {e}")
 
@@ -174,8 +164,8 @@ class BotEngine:
     # Internal: single sweep of all subreddits
     # ------------------------------------------------------------------
 
-    def _sweep(self, page, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
-        """Iterate over each subreddit, fetch posts via authenticated Browser (Playwright), analyse with Gemini."""
+    def _sweep(self, browser, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled):
+        """Iterate over each subreddit, fetch posts via authenticated Browser (Selenium), analyse with Gemini."""
         tools_description = "\n".join(
             f"- {t['name']}: {t['description']} (Link: {t['affiliate_link']})"
             for t in tools
@@ -193,17 +183,27 @@ class BotEngine:
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
-                # Navigate directly to the JSON page to avoid CORS issues
-                page.goto(url, wait_until="domcontentloaded")
+                
+                # Open a new background tab so we don't interrupt the user's active browsing
+                browser.open_tab(url)
                 
                 # Extract the JSON text from the <pre> tag that Chrome renders
-                json_text = page.evaluate("document.querySelector('pre') ? document.querySelector('pre').innerText : document.body.innerText")
+                json_text = browser.driver.execute_script("return document.querySelector('pre') ? document.querySelector('pre').innerText : document.body.innerText")
                 
                 import json
                 data = json.loads(json_text)
                 posts = data.get('data', {}).get('children', [])
+                
+                # Close the background tab immediately
+                browser.close_tab()
+                
             except Exception as e:
                 self._log.log(f"   ⚠️  Could not fetch r/{sub_name}: {e}")
+                # Ensure tab is closed even if fetching fails
+                try:
+                    browser.close_tab()
+                except:
+                    pass
                 continue
 
             for post_item in posts:

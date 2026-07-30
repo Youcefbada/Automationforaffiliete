@@ -30,9 +30,6 @@ SETTINGS_SCHEMA = [
     ("telegram_bot_token", "Bot Token",  "Telegram bot token from @BotFather", True),
     ("telegram_chat_id",   "Chat ID",    "Your Telegram chat ID",              False),
 
-    ("section", "Browser Settings", None, None),
-    ("headless_mode", "Headless Mode", "Yes (hidden) or No (visible)", False),
-
     ("section", "Target Subreddits", None, None),
     ("subreddits", "Subreddits", "Comma separated, e.g. SaaS,startups,freelance", False),
 ]
