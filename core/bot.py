@@ -127,14 +127,12 @@ class BotEngine:
         # ---- Main sweep loop ----
         headless = settings.get("headless_mode", "No").strip().lower() == "yes"
         user_data_dir = os.path.join(os.path.expanduser("~"), "Desktop", "automation_chrome_profile")
-        executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-
         try:
             with sync_playwright() as p:
                 self._log.log(f"🌐 Launching Google Chrome (Headless: {headless})…")
                 browser_context = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
-                    executable_path=executable_path,
+                    channel="chrome",
                     headless=headless,
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     viewport={"width": 1280, "height": 720}
