@@ -78,18 +78,9 @@ class BotEngine:
 
         # ---- Load settings ----
         settings = self._db.get_all_settings()
-        required_keys = [
-            "gemini_api_key", "subreddits",
-        ]
-        missing = [k for k in required_keys if not settings.get(k)]
-        if missing:
-            self._log.log(f"❌ Missing settings: {', '.join(missing)}")
-            self._log.log("Please fill in the Settings tab and try again.")
-            return
-
-        subreddits = [s.strip() for s in settings["subreddits"].split(",") if s.strip()]
-        if not subreddits:
-            self._log.log("❌ No subreddits configured.")
+        search_queries = [s.strip() for s in settings.get("search_queries", "").split(",") if s.strip()]
+        if not search_queries:
+            self._log.log("❌ No search queries configured. Please add them.")
             return
 
         tools = self._db.get_all_tools()
@@ -120,7 +111,7 @@ class BotEngine:
         else:
             self._log.log("⚠️  Telegram not configured — skipping notifications")
 
-        self._log.log(f"📋 Monitoring {len(subreddits)} subreddit(s): {', '.join(subreddits)}")
+        self._log.log(f"📋 Monitoring {len(search_queries)} global search queries: {', '.join(search_queries)}")
         self._log.log(f"🛠️  {len(tools)} tool(s) loaded")
         self._log.log("—" * 50)
 
@@ -160,7 +151,7 @@ class BotEngine:
                     break
 
                 try:
-                    self._sweep(browser, groq_client, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
+                    self._sweep(browser, groq_client, search_queries, tools, tg_token, tg_chat_id, telegram_enabled)
                 except Exception as e:
                     self._log.log(f"⚠️  Error during sweep: {e}")
                     self._log.log("Retrying in 60 seconds…")
@@ -189,28 +180,25 @@ class BotEngine:
 
     def _sweep(
         self, browser, groq_client,
-        subreddits: list, tools: list,
+        search_queries: list, tools: list,
         tg_token: str, tg_chat_id: str, telegram_enabled: bool
     ):
-        """Perform one full sweep of all target subreddits using Selenium tabs."""
+        """Perform one pass over all search queries."""
         now_utc = datetime.now(timezone.utc)
-
-        # Build tools description for prompt
-        tools_description = ""
-        for t in tools:
-            tools_description += f"- **{t['name']}**: {t['description']}\n"
-
-        for sub_name in subreddits:
+        
+        for query in search_queries:
             if self._stop_event.is_set():
                 return
 
-            # Quick delay between API calls to avoid Reddit rate limit (60/min limit)
+            # Quick delay between searches
             if self._stop_event.wait(timeout=2):
                 return
 
-            self._log.log(f"🔍 Scraping r/{sub_name} via Chrome…")
+            self._log.log(f"🔍 Global Search via Chrome: \"{query}\"")
             try:
-                url = f"https://www.reddit.com/r/{sub_name}/new/"
+                import urllib.parse
+                safe_query = urllib.parse.quote(query)
+                url = f"https://www.reddit.com/search/?q={safe_query}&sort=new"
                 
                 browser.open_tab(url)
                 # Wait 5 seconds to act human-like and let the UI render fully
@@ -364,7 +352,7 @@ class BotEngine:
                                 {"role": "system", "content": system_prompt},
                                 {"role": "user", "content": f"Post Title: {title}\n\nPost Body: {post_body}"}
                             ],
-                            model="llama3-8b-8192",
+                            model="llama-3.1-8b-instant",
                         )
                         reply_text = chat_completion.choices[0].message.content.strip()
                     except Exception as e:
