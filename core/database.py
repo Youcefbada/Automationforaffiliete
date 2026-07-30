@@ -64,6 +64,15 @@ class Database:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memory_cache (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_text    TEXT NOT NULL,
+                reply_text   TEXT NOT NULL,
+                created_at   TEXT NOT NULL
+            )
+        """)
+
         conn.commit()
         conn.close()
 
@@ -131,13 +140,49 @@ class Database:
     # ------------------------------------------------------------------
 
     def is_post_processed(self, post_id: str) -> bool:
-        """Check whether a Reddit post has already been handled."""
+        """Check if a post has already been processed."""
         conn = self._connect()
-        row = conn.execute(
-            "SELECT 1 FROM processed_posts WHERE post_id = ?", (post_id,)
-        ).fetchone()
+        row = conn.execute("SELECT 1 FROM processed_posts WHERE post_id = ?", (post_id,)).fetchone()
         conn.close()
         return row is not None
+
+    # ------------------------------------------------------------------
+    # Memory Cache (AI limits protection)
+    # ------------------------------------------------------------------
+
+    def save_to_cache(self, post_text: str, reply_text: str):
+        """Save a successful AI reply to the database for future reuse."""
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO memory_cache (post_text, reply_text, created_at) VALUES (?, ?, ?)",
+            (post_text, reply_text, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+
+    def get_similar_reply(self, new_post_text: str) -> str:
+        """
+        Check if we already generated a reply for a very similar post.
+        Returns the cached reply if similarity > 75%, otherwise returns None.
+        """
+        import difflib
+        conn = self._connect()
+        rows = conn.execute("SELECT post_text, reply_text FROM memory_cache ORDER BY id DESC LIMIT 500").fetchall()
+        conn.close()
+        
+        best_ratio = 0.0
+        best_reply = None
+        
+        for row in rows:
+            old_post_text = row["post_text"]
+            # Basic difflib sequence matching
+            ratio = difflib.SequenceMatcher(None, new_post_text.lower(), old_post_text.lower()).ratio()
+            if ratio > 0.75 and ratio > best_ratio:
+                best_ratio = ratio
+                best_reply = row["reply_text"]
+                
+        return best_reply
 
     def mark_post_processed(self, post_id: str):
         """Record a post ID so we skip it in future sweeps."""

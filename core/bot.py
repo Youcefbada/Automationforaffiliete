@@ -297,18 +297,33 @@ class BotEngine:
                     f"4. Tell the user exactly this concept: 'I don't want to spam links here, but I have put the link to this tool in the pinned post on my Reddit profile if you want to check it out.'\n"
                 )
 
-                # Call Gemini with rate limiting
-                try:
-                    res = gemini_client.models.generate_content(
-                        model=model_name, contents=prompt
-                    )
-                    reply_text = res.text.strip()
-                except Exception as e:
-                    self._log.log(f"   ⚠️  Gemini error: {e}")
-                    time.sleep(GEMINI_CALL_DELAY)
-                    continue
+                # --- Database Memory Caching ---
+                cached_reply = self._db.get_similar_reply(combined_text)
+                if cached_reply:
+                    self._log.log("   🧠 [CACHE HIT] Found a 75%+ similar past post! Reusing old AI reply (0 API tokens used).")
+                    reply_text = cached_reply
+                else:
+                    self._log.log("   ⏳ [CACHE MISS] Unique post. Sleeping 65 seconds to protect Google API limits...")
+                    # Safe-Sleep 65 seconds to strictly obey the 15 RPM limit and prevent quota exhaustion
+                    if self._stop_event.wait(timeout=65):
+                        return
+                        
+                    # Call Gemini
+                    try:
+                        res = gemini_client.models.generate_content(
+                            model=model_name, contents=prompt
+                        )
+                        reply_text = res.text.strip()
+                        
+                        # Save successful AI reply to the Memory Cache
+                        if reply_text.upper() != "NO":
+                            self._db.save_to_cache(combined_text, reply_text)
+                            
+                    except Exception as e:
+                        self._log.log(f"   ⚠️  Gemini error: {e}")
+                        continue
 
-                time.sleep(GEMINI_CALL_DELAY)
+                # (Wait removed since we use 65s pre-sleep)
 
                 # Mark as processed regardless of outcome
                 self._db.mark_post_processed(post_id)
