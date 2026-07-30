@@ -193,12 +193,14 @@ class BotEngine:
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
                 url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
-                # Evaluate Javascript directly inside the browser to fetch the JSON natively using browser cookies!
-                data = page.evaluate(f'''async () => {{
-                    const res = await fetch("{url}");
-                    if (!res.ok) throw new Error("HTTP " + res.status);
-                    return await res.json();
-                }}''')
+                # Navigate directly to the JSON page to avoid CORS issues
+                page.goto(url, wait_until="domcontentloaded")
+                
+                # Extract the JSON text from the <pre> tag that Chrome renders
+                json_text = page.evaluate("document.querySelector('pre') ? document.querySelector('pre').innerText : document.body.innerText")
+                
+                import json
+                data = json.loads(json_text)
                 posts = data.get('data', {}).get('children', [])
             except Exception as e:
                 self._log.log(f"   ⚠️  Could not fetch r/{sub_name}: {e}")
