@@ -297,17 +297,40 @@ class BotEngine:
 
                 self._log.log(f"   🎯 Target Lead Found: \"{title[:80]}\"")
 
-                # Generate a simple Local Template (No-AI)
+                # Generate a smart Local Template (No-AI)
+                suggested_tool = "my tool"
                 if tools:
-                    suggested_tool = tools[0]["name"]
-                else:
-                    suggested_tool = "my tool"
+                    # Smart routing based on keywords
+                    if any(kw in combined_text for kw in ["social", "post", "schedule", "instagram", "content", "marketing", "facebook"]):
+                        # Route to Ocoya
+                        for t in tools:
+                            if "Ocoya" in t["name"]:
+                                suggested_tool = "Ocoya"
+                                break
+                    elif any(kw in combined_text for kw in ["chat", "bot", "support", "document", "knowledge", "customer"]):
+                        # Route to CustomGPT
+                        for t in tools:
+                            if "CustomGPT" in t["name"]:
+                                suggested_tool = "CustomGPT"
+                                break
+                    else:
+                        # Fallback to CustomGPT if no strong match
+                        for t in tools:
+                            if "CustomGPT" in t["name"]:
+                                suggested_tool = "CustomGPT"
+                                break
                     
-                reply_text = (
-                    f"Hey there, I saw your post and it looks like you are looking for a solution. "
-                    f"You should definitely check out {suggested_tool}.\n\n"
-                    f"(I don't want to spam links here, but I put the link to it in the pinned post on my Reddit profile if you want to check it out!)"
-                )
+                import random
+                clean_title = title.lower().strip()
+                if len(clean_title) > 30:
+                    clean_title = clean_title[:30] + "..."
+                    
+                templates = [
+                    f"Man I totally get what you're saying about {clean_title}. I was struggling with the exact same thing a while ago. You might want to look into {suggested_tool}, it pretty much automated that entire headache for me. I dropped the exact name of it on my page if you're curious, but either way good luck with it!",
+                    f"Read your post and it really resonated. Dealing with {clean_title} can be super annoying. Have you tried looking into {suggested_tool}? I started using it recently and it saved me so much time. I have a brief write-up about it on my wall if it helps.",
+                    f"I've been in the exact same boat. The easiest workaround I found was just using {suggested_tool}. It handles all the heavy lifting. I actually mentioned it on my bio if you want to see which one I use. Hope that helps man."
+                ]
+                reply_text = random.choice(templates)
 
                 # Mark as processed regardless of outcome
                 self._db.mark_post_processed(post_id)
