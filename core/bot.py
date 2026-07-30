@@ -202,7 +202,7 @@ class BotEngine:
 
             self._log.log(f"🔍 Scanning r/{sub_name}…")
             try:
-                url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=10"
+                url = f"https://www.reddit.com/r/{sub_name}/new.json?limit=25"
                 
                 # Open a new background tab so we don't interrupt the user's active browsing
                 self._log.log(f"   [STEP 1] Opening tab for r/{sub_name}...")
@@ -216,6 +216,9 @@ class BotEngine:
                 import json
                 data = json.loads(json_text)
                 posts = data.get('data', {}).get('children', [])
+                
+                # Wait 2 seconds before closing to appear more human-like
+                time.sleep(2)
                 
                 # Close the background tab immediately
                 self._log.log(f"   [STEP 4] Closing background tab...")
