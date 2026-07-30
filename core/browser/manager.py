@@ -9,7 +9,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 from core.browser.config import ChromeConfig
-from core.browser.launcher import launch_chrome_if_needed
 from core.browser.utils import logger, SeleniumConnectionError
 
 class BrowserManager:
@@ -23,23 +22,21 @@ class BrowserManager:
         Ensures Chrome is running on the debug port, then connects Selenium 4 to it.
         Returns the active webdriver instance.
         """
-        # 1. Launch Chrome if not already running
-        launch_chrome_if_needed(self.config)
-
-        # 2. Connect Selenium to the debugging port
-        logger.info("Connecting Selenium to Chrome...")
+        logger.info("Launching Chrome via native Selenium...")
         chrome_options = Options()
-        chrome_options.add_experimental_option("debuggerAddress", self.config.debugger_address)
+        chrome_options.add_argument(f"--user-data-dir={self.config.USER_DATA_DIR}")
+        chrome_options.add_argument(f"--profile-directory={self.config.PROFILE_DIR}")
+        # Optional: Prevent Chrome from displaying 'Chrome is being controlled by automated software'
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
 
         try:
-            # We use an empty Service to prevent Selenium from trying to manage a ChromeDriver executable,
-            # as we are connecting directly to an existing browser CDP port.
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("Successfully connected to Chrome via Selenium.")
             return self.driver
         except Exception as e:
-            logger.error(f"Failed to connect to Chrome via Selenium: {e}")
-            raise SeleniumConnectionError(f"Could not connect to {self.config.debugger_address}") from e
+            logger.error(f"Failed to launch Chrome. Please ensure ALL Chrome windows are fully closed! Error: {e}")
+            raise SeleniumConnectionError(f"Could not launch Chrome. Is it already running?") from e
 
     def _ensure_driver(self) -> None:
         """Helper to ensure driver is initialized before calling browser methods."""

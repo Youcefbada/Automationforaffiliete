@@ -57,8 +57,8 @@ def launch_chrome_if_needed(config: ChromeConfig) -> None:
 
     logger.info("Launching Chrome...")
     try:
-        # Launch Chrome completely detached from the Python script
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Launch Chrome. Removing DEVNULL so we can capture any stdout/stderr errors.
+        process = subprocess.Popen(command)
     except Exception as e:
         logger.error(f"Failed to launch Chrome subprocess: {e}")
         raise
