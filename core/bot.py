@@ -317,16 +317,15 @@ class BotEngine:
     def _send_telegram(self, token: str, chat_id: str, post_title: str, post_url: str, comment: str):
         """Send a message to a Telegram chat via the Bot API."""
         message = (
-            f"🔔 *New Affiliate Opportunity*\n\n"
-            f"*Post:* {post_title}\n"
-            f"*URL:* {post_url}\n\n"
-            f"*Drafted Comment:*\n{comment}"
+            f"🔔 New Affiliate Opportunity\n\n"
+            f"Post: {post_title}\n"
+            f"URL: {post_url}\n\n"
+            f"Drafted Comment:\n{comment}"
         )
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {
             "chat_id": chat_id,
             "text": message,
-            "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }
         try:
