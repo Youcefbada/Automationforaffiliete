@@ -154,10 +154,6 @@ class BotEngine:
             self._log.log("⚡ Extracted cookies. Closing heavy browser and switching to super-fast invisible API mode!")
             browser.driver.quit()
             
-            # --- Keyword Filter ---
-            # High intent keywords to avoid wasting Gemini API limits
-            intent_keywords = ["how do i", "looking for", "recommend", "need help", "alternative", "tool", "app", "software", "struggle", "advice"]
-            
             while not self._stop_event.is_set():
                 # 7-hour guard
                 elapsed = time.time() - start_time
@@ -166,7 +162,7 @@ class BotEngine:
                     break
 
                 try:
-                    self._sweep(req_session, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled, intent_keywords)
+                    self._sweep(req_session, gemini_client, model_name, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
                 except Exception as e:
                     self._log.log(f"⚠️  Error during sweep: {e}")
                     self._log.log("Retrying in 60 seconds…")
@@ -196,8 +192,7 @@ class BotEngine:
     def _sweep(
         self, req_session, gemini_client, model_name: str,
         subreddits: list, tools: list,
-        tg_token: str, tg_chat_id: str, telegram_enabled: bool,
-        intent_keywords: list
+        tg_token: str, tg_chat_id: str, telegram_enabled: bool
     ):
         """Perform one full sweep of all target subreddits using lightning-fast requests API."""
         now_utc = datetime.now(timezone.utc)
@@ -257,10 +252,29 @@ class BotEngine:
                 title = post.get('title', '')
                 post_body = post.get('selftext', '')[:2000]  # Truncate very long posts
                 
-                # Keyword Pre-filter to avoid Gemini Rate Limits
+                # --- Advanced "Lead Scoring" Filter ---
                 combined_text = (title + " " + post_body).lower()
-                if not any(kw in combined_text for kw in intent_keywords):
-                    self._log.log(f"   ⏭️  Skipped (No intent keywords): \"{title[:50]}\"")
+                
+                # 1. Self-Promotion Blocker (Reject instantly)
+                self_promo_phrases = ["i built", "my new app", "check out my", "i made", "day 1 to", "my traffic exchange", "i created"]
+                if any(p in combined_text for p in self_promo_phrases):
+                    self._log.log(f"   ⏭️  Skipped (Self Promotion Detected): \"{title[:50]}\"")
+                    self._db.mark_post_processed(post_id)
+                    continue
+                    
+                # 2. Buying Intent Match
+                intent_phrases = ["looking for", "need help finding", "is there a", "recommendations", "how can i", "alternative", "any advice", "struggling with", "how do i"]
+                has_intent = any(p in combined_text for p in intent_phrases)
+                
+                # 3. Context Match
+                context_words = ["tool", "software", "app", "platform", "solution", "website", "way to"]
+                has_context = any(p in combined_text for p in context_words)
+                
+                # Logic: Must have both intent AND context, unless it's a very strong direct question
+                is_lead = (has_intent and has_context) or ("is there an app" in combined_text)
+                
+                if not is_lead:
+                    self._log.log(f"   ⏭️  Skipped (No Buying Intent): \"{title[:50]}\"")
                     # Mark processed so we don't scan it again
                     self._db.mark_post_processed(post_id)
                     continue
