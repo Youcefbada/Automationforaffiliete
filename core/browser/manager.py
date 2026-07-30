@@ -26,6 +26,13 @@ class BrowserManager:
         chrome_options = Options()
         chrome_options.add_argument(f"--user-data-dir={self.config.USER_DATA_DIR}")
         chrome_options.add_argument(f"--profile-directory={self.config.PROFILE_DIR}")
+        # CRITICAL FIX for "DevToolsActivePort file doesn't exist" bug on Windows:
+        chrome_options.add_argument(f"--remote-debugging-port={self.config.DEBUG_PORT}")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--remote-allow-origins=*")
+        
         # Optional: Prevent Chrome from displaying 'Chrome is being controlled by automated software'
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
