@@ -76,11 +76,9 @@ class BotEngine:
         self._log.log("🚀 Bot starting up…")
         start_time = time.time()
 
-        # ---- Load settings ----
-        settings = self._db.get_all_settings()
-        search_queries = [s.strip() for s in settings.get("search_queries", "").split(",") if s.strip()]
-        if not search_queries:
-            self._log.log("❌ No search queries configured. Please add them.")
+        subreddits = [s.strip() for s in settings.get("subreddits", "").split(",") if s.strip()]
+        if not subreddits:
+            self._log.log("❌ No subreddits configured. Please add them.")
             return
 
         tools = self._db.get_all_tools()
@@ -111,7 +109,7 @@ class BotEngine:
         else:
             self._log.log("⚠️  Telegram not configured — skipping notifications")
 
-        self._log.log(f"📋 Monitoring {len(search_queries)} global search queries: {', '.join(search_queries)}")
+        self._log.log(f"📋 Monitoring {len(subreddits)} subreddit(s): {', '.join(subreddits)[:100]}...")
         self._log.log(f"🛠️  {len(tools)} tool(s) loaded")
         self._log.log("—" * 50)
 
@@ -151,7 +149,7 @@ class BotEngine:
                     break
 
                 try:
-                    self._sweep(browser, groq_client, search_queries, tools, tg_token, tg_chat_id, telegram_enabled)
+                    self._sweep(browser, groq_client, subreddits, tools, tg_token, tg_chat_id, telegram_enabled)
                 except Exception as e:
                     self._log.log(f"⚠️  Error during sweep: {e}")
                     self._log.log("Retrying in 60 seconds…")
@@ -180,13 +178,13 @@ class BotEngine:
 
     def _sweep(
         self, browser, groq_client,
-        search_queries: list, tools: list,
+        subreddits: list, tools: list,
         tg_token: str, tg_chat_id: str, telegram_enabled: bool
     ):
-        """Perform one pass over all search queries."""
+        """Perform one pass over all subreddits."""
         now_utc = datetime.now(timezone.utc)
         
-        for query in search_queries:
+        for sub_name in subreddits:
             if self._stop_event.is_set():
                 return
 
@@ -194,11 +192,9 @@ class BotEngine:
             if self._stop_event.wait(timeout=2):
                 return
 
-            self._log.log(f"🔍 Global Search via Chrome: \"{query}\"")
+            self._log.log(f"🔍 Scraping r/{sub_name} via Chrome…")
             try:
-                import urllib.parse
-                safe_query = urllib.parse.quote(query)
-                url = f"https://www.reddit.com/search/?q={safe_query}&sort=new"
+                url = f"https://www.reddit.com/r/{sub_name}/new/"
                 
                 browser.open_tab(url)
                 # Wait 5 seconds to act human-like and let the UI render fully
